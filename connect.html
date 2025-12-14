@@ -3963,6 +3963,7 @@ function handleReply(messageId, username) {
             timestamp: new Date().toISOString()
         };
 
+        // Insert directly without going through sendMessage to bypass locks
         const { error } = await supabase
             .from('messages')
             .insert([systemMessage]);
