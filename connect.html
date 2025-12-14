@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8"/>
 <meta content="width=device-width, initial-scale=1.0" name="viewport"/>
-<title>Connect Chat</title>
+<title>Crooms Connect Chat</title>
 <script src="https://cdn.tailwindcss.com"></script>
 <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet"/>
 <script src="https://esm.sh/@supabase/supabase-js@2"></script>
@@ -2222,6 +2222,7 @@ body {
     <button class="header-icon-btn" id="online-toggle-btn" title="Toggle Online Users"><i class="fas fa-users"></i></button>
     <button class="header-icon-btn" id="settings-btn" title="Settings"><i class="fas fa-cog"></i></button>
     <button class="header-icon-btn" id="mod-menu-btn" style="display: none;" title="Mod Menu"><i class="fas fa-user-shield"></i></button>
+    <button class="header-icon-btn" id="supermod-menu-btn" style="display: none;" title="Supermod Menu"><i class="fas fa-crown"></i></button>
     <!-- --- END MODIFICATION --- -->
     <!-- Theme selector removed from here -->
     <div class="user-info" id="user-info" style="display: none;">
@@ -2317,6 +2318,41 @@ body {
 <small>Locks the chat so only moderators can send messages.</small>
 </div>
 <button id="chat-lock-toggle-btn">Lock Chat</button>
+</div>
+</div>
+</div>
+<!-- SUPERMOD MENU MODAL -->
+<div class="mod-menu-overlay" id="supermod-menu-modal">
+<div class="mod-menu-content">
+<span class="modal-close-btn" id="supermod-menu-close">×</span>
+<h2>Supermod Menu</h2>
+<div class="mod-menu-item">
+<div>
+<p>Global Chat Lock</p>
+<small>Locks the chat globally for all users except supermods.</small>
+</div>
+<button id="global-chat-lock-toggle-btn">Global Lock</button>
+</div>
+<div class="mod-menu-item">
+<div>
+<p>Clear All Messages</p>
+<small>Deletes all messages from the chat history.</small>
+</div>
+<button id="clear-all-messages-btn">Clear All</button>
+</div>
+<div class="mod-menu-item">
+<div>
+<p>System Announcement</p>
+<small>Send a system-wide announcement to all users.</small>
+</div>
+<button id="system-announcement-btn">Send Announcement</button>
+</div>
+<div class="mod-menu-item">
+<div>
+<p>User Management</p>
+<small>View and manage all user accounts.</small>
+</div>
+<button id="user-management-btn">Manage Users</button>
 </div>
 </div>
 </div>
@@ -2785,6 +2821,7 @@ body {
     window.currentUser = null;
     let currentUsername = 'Anonymous';
     let currentUserIsVerified = false;
+    let currentUserIsSupermod = false;
     let channel = null; // To hold the channel subscription
     let typingIndicator;
     let typeTimer = null;
@@ -2812,13 +2849,9 @@ body {
     let onlineUsers = {};
 
     const verifiedCache = {};
-    const supermodCache = {};
     function clearVerifiedCache() {
         for (const key in verifiedCache) {
             delete verifiedCache[key];
-        }
-        for (const key in supermodCache) {
-            delete supermodCache[key];
         }
     }
 
@@ -2871,22 +2904,19 @@ body {
         onlineUsersList.innerHTML = '';
         userList.sort((a, b) => a.user.localeCompare(b.user)); // Sort alphabetically
 
-        userList.forEach(async (presence) => {
+        userList.forEach(presence => {
             const div = document.createElement('div');
             div.className = 'online-user-item';
-
+            
             const avatar = (presence.avatar && presence.avatar.trim() !== "")
                 ? presence.avatar
                 : `https://api.dicebear.com/6.x/thumbs/svg?seed=${encodeURIComponent(presence.user)}`;
 
-            const verified = presence.is_verified;
-            const supermod = await isUserSupermod(presence.user);
-
             div.innerHTML = `
                 <img src="${avatar}" alt="${presence.user} avatar">
                 <span>${presence.user}</span>
-                ${verified ? `<span class="verified-badge" title="Verified">✅</span>` : ""}
-                ${supermod ? `<span class="supermod-badge" title="Super Moderator">👑</span>` : ""}
+                ${presence.is_verified ? `<span class="verified-badge" title="Verified">✅</span>` : ""}
+                ${presence.is_supermod ? `<span class="verified-badge" title="Supermod">⭐</span>` : ""}
             `;
             onlineUsersList.appendChild(div);
         });
@@ -2961,14 +2991,14 @@ body {
     }
 
     async function isUserSupermod(username) {
-        if (supermodCache.hasOwnProperty(username)) return supermodCache[username];
+        if (verifiedCache.hasOwnProperty(username + '_supermod')) return verifiedCache[username + '_supermod'];
         const { data, error } = await supabase
             .from('profiles')
             .select('is_supermod')
             .eq('username', username)
             .single();
         const supermod = !!(data && data.is_supermod);
-        supermodCache[username] = supermod;
+        verifiedCache[username + '_supermod'] = supermod;
         return supermod;
     }
 
@@ -3012,11 +3042,10 @@ body {
             : `https://api.dicebear.com/6.x/thumbs/svg?seed=${encodeURIComponent(currentUsername)}`;
         userNameSpan.textContent = currentUsername;
         userVerifiedImg.style.display = currentUserIsVerified ? "" : "none";
-        const userSupermodImg = document.getElementById('user-supermod');
-        if (userSupermodImg) userSupermodImg.style.display = currentUserIsSupermod ? "" : "none";
         userInfoDiv.style.display = 'flex';
         
         modMenuBtn.style.display = currentUserIsVerified ? 'flex' : 'none';
+        supermodMenuBtn.style.display = currentUserIsSupermod ? 'flex' : 'none';
     }
 
     function cleanMessageMentions(text) {
@@ -3165,13 +3194,14 @@ body {
         const blocked = getBlockedUsers();
         if (blocked.includes(msg.user_id)) return;
         const isSelf = window.currentUser && msg.user_id === window.currentUser.id;
+        const isSystem = msg.user_id === 'system';
         const username = cleanUsername(msg.username) || "Anonymous";
         const avatarSrc = msg.avatar_url && msg.avatar_url.trim() !== "" ? msg.avatar_url : `https://api.dicebear.com/6.x/thumbs/svg?seed=${encodeURIComponent(username)}`;
         const div = document.createElement('div');
         const theme = localStorage.getItem(themeKey) || 'dark';
         const isDOS = theme === 'dos';
         const isAIM = theme === 'aim';
-        div.className = `message ${isSelf ? 'self' : 'other'}`;
+        div.className = `message ${isSelf ? 'self' : 'other'} ${isSystem ? 'system' : ''}`;
         div.dataset.messageId = msg.id;
         div.dataset.userId = msg.user_id;
         div.dataset.username = username;
@@ -3185,9 +3215,11 @@ body {
         const timestampText = `${formattedDate} – ${formattedTime}`;
         const formattedMessage = cleanMessageMentions(msg.message);
         let modToolsHtml = '';
-        if (isSelf) {
+        if (isSystem) {
+            // No mod tools for system messages
+        } else if (isSelf) {
             modToolsHtml = `<div class="mod-tools"><button class="mod-tools-toggle"><i class="fas fa-ellipsis-v"></i></button><div class="mod-tools-menu"><button data-action="reply" data-message-id="${msg.id}" data-username="${username}"><i class="fas fa-reply fa-fw"></i> Reply</button><button data-action="edit" data-message-id="${msg.id}"><i class="fas fa-pencil-alt fa-fw"></i> Edit</button><button data-action="delete-self" data-message-id="${msg.id}"><i class="fas fa-trash fa-fw"></i> Delete</button></div></div>`;
-        } else if (currentUserIsVerified) {
+        } else if (currentUserIsVerified || currentUserIsSupermod) {
             modToolsHtml = `<div class="mod-tools"><button class="mod-tools-toggle"><i class="fas fa-ellipsis-v"></i></button><div class="mod-tools-menu"><button data-action="reply" data-message-id="${msg.id}" data-username="${username}"><i class="fas fa-reply fa-fw"></i> Reply</button><button data-action="delete" data-message-id="${msg.id}"><i class="fas fa-trash fa-fw"></i> Delete Message</button><button data-action="timeout-10m" data-user-id="${msg.user_id}"><i class="fas fa-clock fa-fw"></i> Timeout 10m</button><button data-action="timeout-1h" data-user-id="${msg.user_id}"><i class="fas fa-hourglass-half fa-fw"></i> Timeout 1h</button><button data-action="ban" data-user-id="${msg.user_id}"><i class="fas fa-gavel fa-fw"></i> Ban User</button><button data-action="pardon" data-user-id="${msg.user_id}"><i class="fas fa-hand-holding-heart fa-fw"></i> Pardon User</button></div></div>`;
         } else {
             modToolsHtml = `<div class="mod-tools"><button class="mod-tools-toggle"><i class="fas fa-ellipsis-v"></i></button><div class="mod-tools-menu"><button data-action="reply" data-message-id="${msg.id}" data-username="${username}"><i class="fas fa-reply fa-fw"></i> Reply</button></div></div>`;
@@ -3198,9 +3230,13 @@ body {
         } else if (isAIM) {
             div.innerHTML = `<div class="message-content"><div class="username">${username}</div><div class="text">${formattedMessage}</div><div class="timestamp">${timestampText}</div></div> ${modToolsHtml}`;
         } else {
-            div.innerHTML = `${avatarHtml}<div class="message-content"><div class="username">${username}${verified ? `<span class="verified-badge" title="Verified">☑️</span>` : ""}</div><div class="text">${formattedMessage}</div><div class="timestamp">${timestampText}</div></div>${modToolsHtml}`;
+            div.innerHTML = `${avatarHtml}<div class="message-content"><div class="username">${username}${verified ? `<span class="verified-badge" title="Verified">☑️</span>` : ""}${supermod ? `<span class="verified-badge" title="Supermod">⭐</span>` : ""}</div><div class="text">${formattedMessage}</div><div class="timestamp">${timestampText}</div></div>${modToolsHtml}`;
         }
-        container.appendChild(div);
+        if (container === chatBox) {
+            container.insertBefore(div, typingIndicator);
+        } else {
+            container.appendChild(div);
+        }
     }
 
     async function renderMessages(isInitialLoad = false, isLoadingOlder = false, oldScrollHeight = 0, oldScrollTop = 0, keepScrollPosition = false) {
@@ -3210,16 +3246,11 @@ body {
             chatBox.querySelectorAll('.message').forEach(el => el.remove());
             chatBox.prepend(loadingOlderDiv);
 
-        for (const msg of loadedMessages) {
-            await displayMessage(msg); // This will now respect blocklist
-        }
-
-        // Ensure typing indicator is at the end
-        if (typingIndicator) {
-            chatBox.appendChild(typingIndicator);
-        }
-
-        // applyBlocklist(); // No longer needed here, displayMessage handles it
+            for (const msg of loadedMessages) {
+                await displayMessage(msg); // This will now respect blocklist
+            }
+            
+            // applyBlocklist(); // No longer needed here, displayMessage handles it
             
             setTimeout(() => {
                 const currentScrollHeight = chatBox.scrollHeight;
@@ -3250,29 +3281,8 @@ body {
             .order('timestamp', { ascending: true })
             .range(start, end);
 
-loadedMessages = data || [];
-if (loadedMessages.length === 0) {
-    // Add test messages if no messages from database
-    loadedMessages = [
-        {
-            id: 'test1',
-            user_id: 'testuser1',
-            username: 'TestUser1',
-            avatar_url: '',
-            message: 'Hello, this is a test message.',
-            timestamp: new Date().toISOString()
-        },
-        {
-            id: 'test2',
-            user_id: 'testuser2',
-            username: 'TestUser2',
-            avatar_url: '',
-            message: 'This is another test message.',
-            timestamp: new Date().toISOString()
-        }
-    ];
-}
-if (loadedMessages.length < PAGE_SIZE) allOlderLoaded = true;
+        loadedMessages = data || [];
+        if (loadedMessages.length < PAGE_SIZE) allOlderLoaded = true;
         
         loadingOlderDiv.style.display = allOlderLoaded ? 'none' : 'block';
         await renderMessages(true);
@@ -3445,6 +3455,7 @@ if (loadedMessages.length < PAGE_SIZE) allOlderLoaded = true;
      * @param {string} userInfo.username - The user's display name.
      * @param {string} userInfo.avatar - The user's avatar URL.
      * @param {boolean} userInfo.isVerified - The user's verification status.
+     * @param {boolean} userInfo.isSupermod - The user's supermod status.
      */
     function subscribeToMessages(userInfo) {
         // === DEBUG ===
@@ -3472,12 +3483,7 @@ if (loadedMessages.length < PAGE_SIZE) allOlderLoaded = true;
                 loadedMessages.push(payload.new);
                 totalMessageCount += 1;
                 await displayMessage(payload.new);
-
-                // Ensure typing indicator is at the end
-                if (typingIndicator) {
-                    chatBox.appendChild(typingIndicator);
-                }
-
+                
                 if (wasScrolledToBottom) {
                     chatBox.scrollTop = chatBox.scrollHeight;
                 }
@@ -3646,9 +3652,15 @@ if (loadedMessages.length < PAGE_SIZE) allOlderLoaded = true;
             return;
         }
 
-        // Check if chat is locked and user is not verified
-        if (isChatLocked && !currentUserIsVerified) {
+        // Check if chat is locked and user is not verified or supermod
+        if (isChatLocked && !currentUserIsVerified && !currentUserIsSupermod && msg.user_id !== 'system') {
             showToast('Chat is currently locked. Only moderators can send messages.', 'error');
+            return;
+        }
+
+        // Check if chat is globally locked and user is not supermod
+        if (isChatGloballyLocked && !currentUserIsSupermod && msg.user_id !== 'system') {
+            showToast('Chat is globally locked. Only supermods can send messages.', 'error');
             return;
         }
 
@@ -3886,7 +3898,7 @@ function handleReply(messageId, username) {
         }
 
         showToast("Syncing your profile picture to past messages... This may take a moment.", 'success');
-        
+
         const { error } = await supabase
             .from('messages')
             .update({ avatar_url: newAvatarUrl })
@@ -3897,6 +3909,74 @@ function handleReply(messageId, username) {
         } else {
             showToast("Profile picture sync complete!", 'success');
         }
+    }
+
+    // --- SUPERMOD FUNCTIONS ---
+    async function toggleGlobalChatLock() {
+        const isGloballyLocked = localStorage.getItem('isChatGloballyLocked') === 'true';
+        const newState = !isGloballyLocked;
+
+        localStorage.setItem('isChatGloballyLocked', newState);
+        globalChatLockToggleBtn.textContent = newState ? 'Global Unlock' : 'Global Lock';
+        showToast(`Global chat ${newState ? 'locked' : 'unlocked'}.`, 'success');
+
+        // Broadcast to all users
+        if (channel) {
+            channel.send({
+                type: 'broadcast',
+                event: 'global_chat_lock_toggle',
+                payload: { locked: newState }
+            });
+        }
+    }
+
+    async function clearAllMessages() {
+        if (!confirm('Are you sure you want to delete ALL messages? This action cannot be undone.')) return;
+
+        showToast("Clearing all messages...", 'success');
+
+        const { error } = await supabase
+            .from('messages')
+            .delete()
+            .neq('user_id', 'system'); // Delete all messages except system messages
+
+        if (error) {
+            showToast("Failed to clear messages: " + error.message, 'error');
+        } else {
+            showToast("All messages cleared!", 'success');
+            // Clear local state
+            loadedMessages = loadedMessages.filter(msg => msg.user_id === 'system');
+            totalMessageCount = loadedMessages.length;
+            renderMessages(true);
+        }
+    }
+
+    async function sendSystemAnnouncement() {
+        const announcement = prompt('Enter system announcement:');
+        if (!announcement || !announcement.trim()) return;
+
+        const systemMessage = {
+            user_id: 'system',
+            username: 'SYSTEM',
+            avatar_url: 'https://api.dicebear.com/6.x/thumbs/svg?seed=System',
+            message: `📢 SYSTEM ANNOUNCEMENT: ${announcement.trim()}`,
+            timestamp: new Date().toISOString()
+        };
+
+        const { error } = await supabase
+            .from('messages')
+            .insert([systemMessage]);
+
+        if (error) {
+            showToast("Failed to send announcement: " + error.message, 'error');
+        } else {
+            showToast("System announcement sent!", 'success');
+        }
+    }
+
+    async function openUserManagement() {
+        showToast("User management feature coming soon!", 'success');
+        // TODO: Implement user management interface
     }
     // --- END MODERATOR FUNCTIONS ---
     
@@ -4174,6 +4254,11 @@ function handleReply(messageId, username) {
              closeModalOnClick(modMenuModal);
         }
     });
+    supermodMenuModal.addEventListener('click', (e) => {
+        if (e.target === supermodMenuModal || e.target === supermodMenuClose) {
+             closeModalOnClick(supermodMenuModal);
+        }
+    });
     // --- MODIFICATION: Settings Modal Listeners ---
     settingsModal.addEventListener('click', (e) => {
         if (e.target === settingsModal || e.target === settingsMenuClose) {
@@ -4214,6 +4299,26 @@ function handleReply(messageId, username) {
             });
         }
         closeModalOnClick(modMenuModal);
+    });
+
+    globalChatLockToggleBtn.addEventListener('click', () => {
+        toggleGlobalChatLock();
+        closeModalOnClick(supermodMenuModal);
+    });
+
+    clearAllMessagesBtn.addEventListener('click', () => {
+        clearAllMessages();
+        closeModalOnClick(supermodMenuModal);
+    });
+
+    systemAnnouncementBtn.addEventListener('click', () => {
+        sendSystemAnnouncement();
+        closeModalOnClick(supermodMenuModal);
+    });
+
+    userManagementBtn.addEventListener('click', () => {
+        openUserManagement();
+        closeModalOnClick(supermodMenuModal);
     });
     profileBackBtn.addEventListener('click', () => {
         userProfileView.classList.remove('visible');
@@ -4428,7 +4533,8 @@ function handleReply(messageId, username) {
             channel = subscribeToMessages({
                 username: currentUsername,
                 avatar: userAvatarImg.src,
-                isVerified: currentUserIsVerified
+                isVerified: currentUserIsVerified,
+                isSupermod: currentUserIsSupermod
             });
             // --- END MODIFICATION ---
         });
